@@ -1,4 +1,3 @@
-// tests/client_test.rs
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, Command, Stdio};
 use std::thread;
