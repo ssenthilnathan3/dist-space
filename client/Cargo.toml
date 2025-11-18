@@ -1,0 +1,11 @@
+[package]
+name = "client"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+prost = "0.14.1"
+common = { path = "../common" }
+uuid = { version = "1.18.1", features = ["v4"] }
+chrono = "0.4.42"
+prost-types = "0.14.1"

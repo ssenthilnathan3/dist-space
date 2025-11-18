@@ -1,0 +1,173 @@
+use prost::Message;
+use std::{
+    io::{self, BufReader, Read, Write},
+    net::TcpStream,
+    process,
+    sync::{Arc, Mutex},
+    thread,
+};
+
+use common::{protocol::ServerMessage, workspace::OperationProto};
+
+use crate::types::ClientState;
+
+mod types;
+
+fn main() {
+    let stream = TcpStream::connect("127.0.0.1:8000");
+
+    // Use SyncDocumentProto instead of Document for shared state
+    let state = Arc::new(Mutex::new(ClientState {
+        doc_id: String::new(),
+        version: 0,
+        buffer: String::new(),
+    }));
+
+    let state_clone = Arc::clone(&state);
+
+    match stream {
+        Ok(stream) => {
+            let stream_clone = match stream.try_clone() {
+                Ok(stream) => stream,
+                Err(e) => {
+                    eprintln!("Failed to clone stream: {}", e);
+                    return;
+                }
+            };
+
+            // Spawn reader thread
+            thread::spawn(move || {
+                if let Err(e) = reader_loop(stream, state_clone) {
+                    eprintln!("\nReader thread error: {}", e);
+                    eprintln!("Exiting application due to socket error.");
+                    process::exit(1);
+                }
+            });
+
+            // Run CLI loop in main thread
+            if let Err(e) = cli_loop(stream_clone, Arc::clone(&state)) {
+                eprintln!("CLI loop error: {}", e);
+            }
+        }
+        Err(e) => {
+            eprintln!("Failed to connect to server: {}", e)
+        }
+    }
+}
+
+fn reader_loop(stream: TcpStream, state: Arc<Mutex<ClientState>>) -> io::Result<()> {
+    let mut reader = BufReader::new(stream);
+
+    loop {
+        // Read 4 bytes (big-endian u32) -> N (payload length)
+        let mut len_bytes = [0u8; 4];
+        reader.read_exact(&mut len_bytes)?;
+        let payload_length = u32::from_be_bytes(len_bytes) as usize;
+
+        // Read exactly N bytes -> payload
+        let mut payload_buffer = vec![0u8; payload_length];
+        reader.read_exact(&mut payload_buffer)?;
+
+        match ServerMessage::decode(&*payload_buffer) {
+            Ok(message) => match message {
+                ServerMessage::Operation(_) => {
+                    println!("Received an Operation message.");
+                }
+                ServerMessage::SyncDocument(doc) => {
+                    println!("Received a SyncDocument message.");
+
+                    // Update shared state
+                    let mut current_state = state.lock().unwrap();
+                    current_state.buffer = doc.content.clone();
+                    current_state.version = doc.version;
+
+                    // Store doc_id upon initial sync
+                    if current_state.doc_id.is_empty() && !doc.doc_id.is_empty() {
+                        current_state.doc_id = doc.doc_id.clone();
+                    }
+
+                    // Print short summary
+                    let content_preview = doc.content.chars().take(80).collect::<String>();
+                    println!(
+                        "\n[SYNC] version={} doc_id={} content='{}...'",
+                        doc.version, doc.doc_id, content_preview
+                    );
+
+                    print!("\nEnter command (put/send/quit): ");
+                    io::stdout().flush()?;
+                }
+            },
+            Err(e) => {
+                eprintln!("\nFailed to decode protobuf message: {}", e);
+            }
+        }
+    }
+}
+
+fn cli_loop(mut stream: TcpStream, state: Arc<Mutex<ClientState>>) -> io::Result<()> {
+    let stdin = io::stdin();
+    let mut command_buffer = String::new();
+
+    loop {
+        command_buffer.clear();
+        print!("\nEnter command (put/send/quit): ");
+        io::stdout().flush()?;
+        stdin.read_line(&mut command_buffer)?;
+        let command = command_buffer.trim();
+
+        match command {
+            "quit" => {
+                println!("Closing socket and exiting.");
+                break;
+            }
+            "put" | "send" => {
+                // Lock state to read doc_id and version
+                let current_state = state.lock().unwrap();
+                let doc_id = current_state.doc_id.clone();
+                let client_version = current_state.version;
+                drop(current_state); // Unlock state quickly
+
+                if doc_id.is_empty() {
+                    println!("Cannot 'put' yet. Awaiting initial SyncDocument from server...");
+                    continue;
+                }
+
+                // Prompt user for new text
+                println!("Enter full new document text (press Enter twice to finish input):");
+                let mut new_content = String::new();
+                loop {
+                    let mut line = String::new();
+                    stdin.read_line(&mut line)?;
+                    if line.trim().is_empty() {
+                        break;
+                    }
+                    new_content.push_str(&line);
+                }
+
+                let operation = OperationProto {
+                    doc_id,
+                    new_content,
+                    client_version,
+                };
+                // Create ServerMessage containing the operation
+                let message = operation.clone().encode_to_vec();
+
+                // Prefix length → bytes
+                let len_bytes = (message.len() as u32).to_be_bytes();
+
+                // Send bytes to server
+                stream.write_all(&len_bytes)?;
+                stream.write_all(&message)?;
+                stream.flush()?;
+
+                println!(
+                    "Sent Operation to server. Waiting for server confirmation (SyncDocument update)..."
+                );
+            }
+            _ => {
+                println!("Unknown command: {}", command);
+            }
+        }
+    }
+    Ok(())
+}

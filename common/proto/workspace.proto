@@ -1,0 +1,15 @@
+syntax = "proto3";
+
+package workspace;
+
+message SyncDocumentProto {
+    string doc_id = 1;
+    string content = 2;
+    uint32 version = 3;
+}
+
+message OperationProto {
+    string doc_id = 5;
+    string new_content = 6;
+    uint32 client_version = 7;
+}
