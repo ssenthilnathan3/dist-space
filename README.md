@@ -35,19 +35,9 @@ Current demo includes,
     
 8. Client 2 sees it immediately
     
-9. An AI agent attaches
+9. It generates a patch
     
-10. It reads the last 100 ops
-    
-11. It generates a patch
-    
-12. Patch applies and everyone sees it
-    
-13. If both edit at once, the merge rule resolves it deterministically
-    
-14. A snapshot is produced
-    
-15. You can replay the last 50 ops deterministically and get the same result
+10. Patch applies and everyone sees it
 
 
 ## To see the demo
