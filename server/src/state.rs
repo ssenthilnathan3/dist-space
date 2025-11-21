@@ -7,8 +7,10 @@
 use std::sync::{Arc, Mutex};
 
 use common::{
-    Document,
-    types::{Operation, OperationLog},
+    Document, Frame,
+    protocol::ServerMessage,
+    types::{Operation, OperationKind, OperationLog},
+    workspace::{OperationProto, SyncDocumentProto},
 };
 use uuid::Uuid;
 
@@ -84,6 +86,7 @@ impl ServerState {
 
     //     clients.clone()
     // }
+    //
 
     pub fn get_clients_arc(&self) -> Arc<Mutex<Vec<Arc<ClientEntry>>>> {
         Arc::clone(&self.clients)
@@ -114,4 +117,73 @@ impl ServerState {
 
     //     clients.iter().find(|c| c.client_id == client_id).cloned()
     // }
+    //
+    //
+
+    pub fn send_applied_op(&self, operation: OperationProto) -> Result<Arc<Frame>, std::io::Error> {
+        let doc_mutex = self.get_document();
+        // 1. Parse and validate proto op
+        if operation.doc_id.is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Operation missing doc_id",
+            ));
+        }
+        if operation.new_content.is_empty() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "Operation content is empty",
+            ));
+        }
+
+        let op_kind: OperationKind = Operation::convert_operation(operation.clone())
+            .expect("Operation kind was missing in the proto, which shouldn't happen here!");
+
+        let parsed_client_id: Uuid =
+            Uuid::parse_str(&operation.client_id).expect("Client ID is not a valid uuid");
+
+        let operation = Operation {
+            op_id: operation.op_id,
+            kind: op_kind,
+            client_id: parsed_client_id,
+            server_version: operation.server_version,
+            doc_id: operation.doc_id,
+            new_content: operation.new_content,
+            client_version: operation.client_version,
+        };
+
+        let (updated_content, new_version) = {
+            let mut doc_guard = doc_mutex.lock().map_err(|e| {
+                std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("Failed to lock document: {}", e),
+                )
+            })?;
+
+            doc_guard
+                .apply_operation(operation.new_content.to_string(), operation.client_version)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?
+        };
+
+        // Append op to op_log
+        if let Err(e) = self.append_op_log(operation.clone()) {
+            eprintln!("Failed to append to op_log: {}", e);
+        }
+
+        // Create SyncDocumentProto
+        let sync_doc = SyncDocumentProto {
+            doc_id: operation.doc_id.clone(),
+            content: updated_content,
+            version: new_version,
+        };
+
+        // Wrap in ServerMessage::SyncDocument
+        let server_message = ServerMessage::SyncDocument(sync_doc);
+
+        // Encode into payload
+        let payload = ServerMessage::encode(&server_message);
+
+        // Return Arc<Frame> to caller
+        Ok(Frame::new_arc(payload))
+    }
 }

@@ -1,5 +1,5 @@
 pub struct ClientState {
     pub doc_id: String,
     pub buffer: String,
-    pub version: u32,
+    pub version: u64,
 }

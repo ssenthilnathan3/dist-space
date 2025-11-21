@@ -2,6 +2,7 @@ mod broadcaster;
 mod client_entry;
 mod reader;
 mod state;
+mod transform;
 mod writer;
 
 use common::protocol::ServerMessage;

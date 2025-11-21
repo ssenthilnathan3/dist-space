@@ -3,15 +3,15 @@ use uuid::Uuid;
 pub struct Document {
     pub uuid: Uuid,
     pub content: String,
-    pub version: u32,
+    pub version: u64,
 }
 
 impl Document {
     pub fn apply_operation(
         &mut self,
         new_content: String,
-        client_version: u32,
-    ) -> Result<(String, u32), String> {
+        client_version: u64,
+    ) -> Result<(String, u64), String> {
         if self.version != client_version {
             return Err(format!(
                 "Version mismatch: document={}, client={}",
