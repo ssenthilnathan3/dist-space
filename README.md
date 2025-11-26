@@ -1,4 +1,4 @@
-# An experiment on distributed workspace engine
+# An experiment on building a distributed workspace engine
 
 **A distributed, deterministic workspace engine that synchronizes code edits across humans and AI agents, maintains a bounded operation log, resolves concurrent edits, and exposes real-time snapshots and context for tools.**
 
