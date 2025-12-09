@@ -9,8 +9,6 @@ pub enum ServerMessage {
     SyncDocument(SyncDocumentProto),
 }
 
-// --- Encoding Implementation (Outgoing Path) ---
-
 impl ServerMessage {
     /// Serializes the inner Protobuf message and wraps it in a length-prefixed buffer with a type ID.
     /// Buffer format: [u32 length (of Type ID + Payload)][u8 type_id][...payload bytes...]
@@ -39,7 +37,6 @@ impl ServerMessage {
     }
 
     /// Deserializes a raw byte slice (from a Frame payload) into a ServerMessage enum variant.
-    ///
     /// This function reads the type ID to know which protobuf struct to decode into.
     pub fn decode(frame_bytes: &[u8]) -> Result<Self, Box<dyn std::error::Error>> {
         // We use a Cursor to track our position as we read through the bytes

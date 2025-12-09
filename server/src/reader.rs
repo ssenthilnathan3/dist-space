@@ -7,8 +7,6 @@ use std::thread;
 use common::error::FrameError;
 use common::frame::Frame;
 use common::protocol::ServerMessage;
-use common::types::Operation;
-use common::workspace::{OperationProto, SyncDocumentProto};
 
 use crate::ClientEntry;
 use crate::state::ServerState;
@@ -65,7 +63,7 @@ impl Reader {
     /// Returns join handle for the thread
     pub fn spawn_reader_thread(
         stream: TcpStream,
-        client_id: Uuid, // Using Uuid instead of usize
+        client_id: Uuid,
         state: Arc<ServerState>,
         broadcast_fn: BroadcastFn,
     ) -> thread::JoinHandle<()> {

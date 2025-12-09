@@ -1,4 +1,4 @@
-// NOTE (Future Devs): Swapped `Vec` for `HashMap<ClientId, ...>` to ensure
+// NOTE: Swapped `Vec` for `HashMap<ClientId, ...>` to ensure
 // stable client positions/keys during additions/removals.
 // This is necessary for future features like replay, checkpointing,
 // or version vectors that rely on persistent client IDs and data stability.
@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use common::{
     Document, Frame,
     protocol::ServerMessage,
-    types::{Operation, OperationKind, OperationLog},
+    types::{Operation, OperationLog},
     workspace::{OperationProto, SyncDocumentProto},
 };
 use uuid::Uuid;
@@ -120,70 +120,91 @@ impl ServerState {
     //
     //
 
-    pub fn send_applied_op(&self, operation: OperationProto) -> Result<Arc<Frame>, std::io::Error> {
+    pub fn send_applied_op(
+        &self,
+        operation_proto: OperationProto,
+    ) -> Result<Arc<Frame>, std::io::Error> {
         let doc_mutex = self.get_document();
-        // 1. Parse and validate proto op
-        if operation.doc_id.is_empty() {
+
+        if operation_proto.doc_id.is_empty() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "Operation missing doc_id",
             ));
         }
-        if operation.new_content.is_empty() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                "Operation content is empty",
-            ));
-        }
 
-        let op_kind: OperationKind = Operation::convert_operation(operation.clone())
-            .expect("Operation kind was missing in the proto, which shouldn't happen here!");
+        let parsed_client_id = Uuid::parse_str(&operation_proto.client_id).map_err(|_| {
+            std::io::Error::new(std::io::ErrorKind::InvalidData, "Invalid client UUID")
+        })?;
 
-        let parsed_client_id: Uuid =
-            Uuid::parse_str(&operation.client_id).expect("Client ID is not a valid uuid");
+        let mut op_kind =
+            Operation::convert_operation(operation_proto.clone()).ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, "Missing op kind")
+            })?;
 
-        let operation = Operation {
-            op_id: operation.op_id,
-            kind: op_kind,
-            client_id: parsed_client_id,
-            server_version: operation.server_version,
-            doc_id: operation.doc_id,
-            new_content: operation.new_content,
-            client_version: operation.client_version,
-        };
+        let client_version = operation_proto.client_version;
 
         let (updated_content, new_version) = {
-            let mut doc_guard = doc_mutex.lock().map_err(|e| {
+            let mut doc = doc_mutex.lock().map_err(|e| {
                 std::io::Error::new(
                     std::io::ErrorKind::Other,
                     format!("Failed to lock document: {}", e),
                 )
             })?;
 
-            doc_guard
-                .apply_operation(operation.new_content.to_string(), operation.client_version)
-                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?
+            if client_version > doc.version {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "Client version {} is from the future (server is {})",
+                        client_version, doc.version
+                    ),
+                ));
+            }
+
+            if client_version < doc.version {
+                // Get ops from log: [client_version, doc.version)
+                let past_ops = self
+                    .op_log
+                    .get_ops_in_range(client_version, doc.version)
+                    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+
+                // Transform incoming op against all past ops
+                for past_op in past_ops {
+                    op_kind = crate::transform::transform(op_kind, past_op.kind);
+                }
+            }
+
+            // Apply transformed op
+            doc.apply_op(&op_kind)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+
+            (doc.content.clone(), doc.version)
         };
 
-        // Append op to op_log
-        if let Err(e) = self.append_op_log(operation.clone()) {
+        // Log the operation
+        // server_version is the version this op was applied TO (i.e., new_version - 1)
+        let final_op = Operation {
+            op_id: operation_proto.op_id,
+            kind: op_kind,
+            doc_id: operation_proto.doc_id.clone(),
+            new_content: String::new(),
+            client_id: parsed_client_id,
+            client_version: client_version,
+            server_version: new_version - 1,
+        };
+
+        if let Err(e) = self.append_op_log(final_op) {
             eprintln!("Failed to append to op_log: {}", e);
         }
 
-        // Create SyncDocumentProto
         let sync_doc = SyncDocumentProto {
-            doc_id: operation.doc_id.clone(),
+            doc_id: operation_proto.doc_id.clone(),
             content: updated_content,
             version: new_version,
         };
 
-        // Wrap in ServerMessage::SyncDocument
         let server_message = ServerMessage::SyncDocument(sync_doc);
-
-        // Encode into payload
-        let payload = ServerMessage::encode(&server_message);
-
-        // Return Arc<Frame> to caller
-        Ok(Frame::new_arc(payload))
+        Ok(Frame::new_arc(ServerMessage::encode(&server_message)))
     }
 }

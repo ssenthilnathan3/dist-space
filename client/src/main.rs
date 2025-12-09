@@ -7,7 +7,8 @@ use std::{
     thread,
 };
 
-use common::{protocol::ServerMessage, workspace::OperationProto};
+use common::{protocol::ServerMessage, workspace::{OperationProto, operation_proto::Kind, ReplaceOp}};
+use uuid::Uuid;
 
 use crate::types::ClientState;
 
@@ -17,7 +18,9 @@ fn main() {
     let stream = TcpStream::connect("127.0.0.1:8000");
 
     // Use SyncDocumentProto instead of Document for shared state
+    let client_id = Uuid::new_v4().to_string();
     let state = Arc::new(Mutex::new(ClientState {
+        client_id,
         doc_id: String::new(),
         version: 0,
         buffer: String::new(),
@@ -125,6 +128,8 @@ fn cli_loop(mut stream: TcpStream, state: Arc<Mutex<ClientState>>) -> io::Result
                 let current_state = state.lock().unwrap();
                 let doc_id = current_state.doc_id.clone();
                 let client_version = current_state.version;
+                let client_id = current_state.client_id.clone();
+                let current_buffer_len = current_state.buffer.len();
                 drop(current_state); // Unlock state quickly
 
                 if doc_id.is_empty() {
@@ -144,20 +149,31 @@ fn cli_loop(mut stream: TcpStream, state: Arc<Mutex<ClientState>>) -> io::Result
                     new_content.push_str(&line);
                 }
 
-                let operation = OperationProto {
-                    doc_id,
-                    new_content,
+                let op_kind = Kind::Replace(ReplaceOp {
+                    start: 0,
+                    end: current_buffer_len as u32,
+                    text: new_content.clone(),
+                    client_id: client_id.clone(),
                     client_version,
+                });
+
+                let operation = OperationProto {
+                    op_id: Uuid::new_v4().as_u64_pair().0,
+                    kind: Some(op_kind),
+                    doc_id,
+                    client_id,
+                    client_version,
+                    server_version: 0,
+                    new_content,
                 };
                 // Create ServerMessage containing the operation
-                let message = operation.clone().encode_to_vec();
-
-                // Prefix length → bytes
-                let len_bytes = (message.len() as u32).to_be_bytes();
+                let server_message = ServerMessage::Operation(operation);
+                let encoded = server_message.encode();
+                let len_bytes = (encoded.len() as u32).to_be_bytes();
 
                 // Send bytes to server
                 stream.write_all(&len_bytes)?;
-                stream.write_all(&message)?;
+                stream.write_all(&encoded)?;
                 stream.flush()?;
 
                 println!(

@@ -6,26 +6,49 @@ pub struct Document {
     pub version: u64,
 }
 
+use crate::types::{DeleteOp, InsertOp, OperationKind, ReplaceOp};
+
 impl Document {
-    pub fn apply_operation(
-        &mut self,
-        new_content: String,
-        client_version: u64,
-    ) -> Result<(String, u64), String> {
-        if self.version != client_version {
-            return Err(format!(
-                "Version mismatch: document={}, client={}",
-                self.version, client_version
-            ));
+    pub fn apply_op(&mut self, op: &OperationKind) -> Result<(), String> {
+        match op {
+            OperationKind::Insert(InsertOp { index, text, .. }) => {
+                if *index as usize > self.content.len() {
+                    return Err(format!(
+                        "Index out of bounds: {} > {}",
+                        index,
+                        self.content.len()
+                    ));
+                }
+                self.content.insert_str(*index as usize, text);
+            }
+            OperationKind::Delete(DeleteOp { start, end, .. }) => {
+                if *end as usize > self.content.len() || start > end {
+                    return Err(format!(
+                        "Invalid deletion range: {}..{} (len {})",
+                        start,
+                        end,
+                        self.content.len()
+                    ));
+                }
+                self.content.replace_range(*start as usize..*end as usize, "");
+            }
+            OperationKind::Replace(ReplaceOp {
+                start, end, text, ..
+            }) => {
+                if *end as usize > self.content.len() || start > end {
+                    return Err(format!(
+                        "Invalid replacement range: {}..{} (len {})",
+                        start,
+                        end,
+                        self.content.len()
+                    ));
+                }
+                self.content
+                    .replace_range(*start as usize..*end as usize, text);
+            }
+            OperationKind::Noop(_) => {}
         }
-        if new_content.is_empty() {
-            return Err("Operation content cannot be empty".to_string());
-        }
-
-        // Apply the operation
-        self.content = new_content;
         self.version += 1;
-
-        Ok((self.content.clone(), self.version))
+        Ok(())
     }
 }

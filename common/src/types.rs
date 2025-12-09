@@ -126,4 +126,25 @@ impl OperationLog {
         logs.push_back(op);
         Ok(())
     }
+
+    pub fn get_ops_in_range(
+        &self,
+        from_version: u64,
+        to_version: u64,
+    ) -> Result<Vec<Operation>, String> {
+        let logs = self
+            .logs
+            .lock()
+            .map_err(|e| format!("Failed to lock logs: {}", e))?;
+
+        // We want ops that were applied to versions [from_version, to_version - 1]
+        // Assuming op.server_version represents the version it was applied TO.
+        let mut result = Vec::new();
+        for op in logs.iter() {
+            if op.server_version >= from_version && op.server_version < to_version {
+                result.push(op.clone());
+            }
+        }
+        Ok(result)
+    }
 }
