@@ -8,26 +8,47 @@ use std::sync::{Arc, Mutex};
 
 use common::{
     Document, Frame,
+    operation::{Operation, OperationLog},
     protocol::ServerMessage,
-    types::{Operation, OperationLog},
-    workspace::{OperationProto, SyncDocumentProto},
+    space::{OperationProto, SyncDocumentProto},
 };
 use uuid::Uuid;
 
 use crate::client_entry::ClientEntry;
 
+/// Default document path for Phase 1 (single-document mode).
+/// Will be replaced by dynamic file paths in Phase 2 (VFS).
+#[allow(dead_code)]
+const DEFAULT_DOC_PATH: &str = "main.txt";
+
+/// Maximum number of concurrent client connections.
+/// Protects against denial-of-service attacks.
+pub const MAX_CLIENTS: usize = 100;
+
+/// Client timeout in milliseconds (30 seconds).
+/// Clients that don't respond to heartbeats within this window are disconnected.
+pub const CLIENT_TIMEOUT_MS: u64 = 30_000;
+
+/// Heartbeat interval in milliseconds (10 seconds).
+/// Server sends ping to clients at this interval.
+pub const HEARTBEAT_INTERVAL_MS: u64 = 10_000;
+
 pub struct ServerState {
     clients: Arc<Mutex<Vec<Arc<ClientEntry>>>>,
+    /// The default document for single-document mode (Phase 1).
+    /// In Phase 2, this will be replaced by `workspace: Arc<Mutex<Workspace>>`
+    /// with a HashMap<Path, Document> structure.
     document: Arc<Mutex<Document>>,
     op_log: Arc<OperationLog>,
 }
 
 impl ServerState {
     pub fn new() -> Self {
+        let doc_id = Uuid::new_v4();
         Self {
             clients: Arc::new(Mutex::new(Vec::new())),
             document: Arc::new(Mutex::new(Document {
-                uuid: Uuid::new_v4(),
+                uuid: doc_id,
                 content: String::new(),
                 version: 0,
             })),
@@ -39,7 +60,8 @@ impl ServerState {
         Arc::clone(&self.document)
     }
 
-    // TODO: use a generic “AddClientError” enum
+    /// Add a new client to the server state.
+    /// Returns Err if the maximum client limit is reached.
     pub fn add_client(&self, client: ClientEntry) -> Result<(), String> {
         let mut clients = match self.clients.lock() {
             Ok(guard) => guard,
@@ -49,9 +71,29 @@ impl ServerState {
             }
         };
 
+        // Check connection limit
+        if clients.len() >= MAX_CLIENTS {
+            return Err(format!(
+                "Connection limit reached: {} clients already connected",
+                MAX_CLIENTS
+            ));
+        }
+
         clients.push(Arc::new(client));
+        println!(
+            "[ServerState] Client added. Total clients: {}",
+            clients.len()
+        );
 
         Ok(())
+    }
+
+    /// Get the current number of connected clients.
+    pub fn client_count(&self) -> usize {
+        match self.clients.lock() {
+            Ok(guard) => guard.len(),
+            Err(poisoned) => poisoned.into_inner().len(),
+        }
     }
 
     pub fn remove_client(&self, client_id: Uuid) -> Option<Arc<ClientEntry>> {
@@ -64,9 +106,75 @@ impl ServerState {
         };
 
         if let Some(pos) = clients.iter().position(|c| c.client_id == client_id) {
-            Some(clients.remove(pos))
+            let removed = clients.remove(pos);
+            println!(
+                "[ServerState] Client {} removed. Remaining clients: {}",
+                client_id,
+                clients.len()
+            );
+            Some(removed)
         } else {
             None
+        }
+    }
+
+    /// Remove all clients that have timed out.
+    /// Returns the number of clients removed.
+    pub fn remove_timed_out_clients(&self) -> usize {
+        let mut clients = match self.clients.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                eprintln!("WARNING: Mutex was poisoned. Recovering.");
+                poisoned.into_inner()
+            }
+        };
+
+        let before = clients.len();
+        clients.retain(|client| {
+            let timed_out = client.is_timed_out(CLIENT_TIMEOUT_MS);
+            if timed_out {
+                println!(
+                    "[ServerState] Client {} timed out ({}ms since last activity)",
+                    client.client_id,
+                    client.ms_since_last_activity()
+                );
+            }
+            !timed_out
+        });
+
+        before - clients.len()
+    }
+
+    /// Send a ping to all connected clients.
+    /// Returns the number of clients pinged.
+    pub fn send_ping_to_all(&self, sequence: u64) -> usize {
+        let clients = match self.clients.lock() {
+            Ok(guard) => guard.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        };
+
+        let ping_msg = ServerMessage::Ping(sequence);
+        let ping_frame = Frame::new_arc(ServerMessage::encode(&ping_msg));
+
+        let mut pinged = 0;
+        for client in clients.iter() {
+            if client.writer_sender.try_send(Arc::clone(&ping_frame)).is_ok() {
+                pinged += 1;
+            }
+        }
+
+        pinged
+    }
+
+    /// Update last activity time for a client.
+    pub fn touch_client(&self, client_id: Uuid) {
+        let clients = match self.clients.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+
+        if let Some(client) = clients.iter().find(|c| c.client_id == client_id) {
+            client.touch();
         }
     }
 
@@ -74,51 +182,9 @@ impl ServerState {
         OperationLog::append_log_arc(Arc::clone(&self.op_log), op)
     }
 
-    // pub fn get_clients(&self) -> Vec<Arc<ClientEntry>> {
-    //     let clients = match self.clients.lock() {
-    //         Ok(guard) => guard,
-    //         Err(poisoned) => {
-    //             // Log a severe error that the data might be inconsistent
-    //             eprintln!("WARNING: Mutex was poisoned. Data might be in an inconsistent state.");
-    //             poisoned.into_inner()
-    //         }
-    //     };
-
-    //     clients.clone()
-    // }
-    //
-
     pub fn get_clients_arc(&self) -> Arc<Mutex<Vec<Arc<ClientEntry>>>> {
         Arc::clone(&self.clients)
     }
-
-    // pub fn client_count(&self) -> usize {
-    //     let clients = match self.clients.lock() {
-    //         Ok(guard) => guard,
-    //         Err(poisoned) => {
-    //             // Log a severe error that the data might be inconsistent
-    //             eprintln!("WARNING: Mutex was poisoned. Data might be in an inconsistent state.");
-    //             poisoned.into_inner()
-    //         }
-    //     };
-
-    //     clients.len()
-    // }
-
-    // pub fn find_client(&self, client_id: Uuid) -> Option<Arc<ClientEntry>> {
-    //     let clients = match self.clients.lock() {
-    //         Ok(guard) => guard,
-    //         Err(poisoned) => {
-    //             // Log a severe error that the data might be inconsistent
-    //             eprintln!("WARNING: Mutex was poisoned. Data might be in an inconsistent state.");
-    //             poisoned.into_inner()
-    //         }
-    //     };
-
-    //     clients.iter().find(|c| c.client_id == client_id).cloned()
-    // }
-    //
-    //
 
     pub fn send_applied_op(
         &self,
@@ -190,7 +256,7 @@ impl ServerState {
             doc_id: operation_proto.doc_id.clone(),
             new_content: String::new(),
             client_id: parsed_client_id,
-            client_version: client_version,
+            client_version,
             server_version: new_version - 1,
         };
 

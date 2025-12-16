@@ -5,22 +5,16 @@ use std::{
 
 use uuid::Uuid;
 
-use crate::workspace::{OperationProto, operation_proto::Kind};
+use crate::space::{OperationProto, operation_proto::Kind};
 
-// #[derive(Clone)]
-// pub struct OpId {
-//     pub server_version: String,
-//     pub sequence: String,
-// }
-//
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct InsertOp {
     pub index: u32,
     pub text: String,
     pub client_id: String,
     pub client_version: u64,
 }
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 
 pub struct DeleteOp {
     pub start: u32,
@@ -28,7 +22,7 @@ pub struct DeleteOp {
     pub client_id: String,
     pub client_version: u64,
 }
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 
 pub struct ReplaceOp {
     pub start: u32,
@@ -37,14 +31,14 @@ pub struct ReplaceOp {
     pub client_id: String,
     pub client_version: u64,
 }
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 
 pub struct NoopOp {
     pub client_id: String,
     pub client_version: u64,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum OperationKind {
     Insert(InsertOp),
     Delete(DeleteOp),

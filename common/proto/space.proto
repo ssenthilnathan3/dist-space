@@ -9,12 +9,6 @@ message SyncDocumentProto {
     uint64 version = 3;
 }
 
-// // Represents a unique operation identifier.
-// message OpIdProto {
-//     string server_version = 1;
-//     string sequence = 2;
-// }
-
 // Defines an insertion operation.
 message InsertOp {
     uint32 index = 1;

@@ -1,4 +1,3 @@
-use prost::Message;
 use std::{
     io::{self, BufReader, Read, Write},
     net::TcpStream,
@@ -7,7 +6,10 @@ use std::{
     thread,
 };
 
-use common::{protocol::ServerMessage, workspace::{OperationProto, operation_proto::Kind, ReplaceOp}};
+use common::{
+    protocol::ServerMessage,
+    space::{OperationProto, ReplaceOp, operation_proto::Kind},
+};
 use uuid::Uuid;
 
 use crate::types::ClientState;
@@ -71,7 +73,7 @@ fn reader_loop(stream: TcpStream, state: Arc<Mutex<ClientState>>) -> io::Result<
         let mut payload_buffer = vec![0u8; payload_length];
         reader.read_exact(&mut payload_buffer)?;
 
-        match ServerMessage::decode(&*payload_buffer) {
+            match ServerMessage::decode(&*payload_buffer) {
             Ok(message) => match message {
                 ServerMessage::Operation(_) => {
                     println!("Received an Operation message.");
@@ -98,6 +100,17 @@ fn reader_loop(stream: TcpStream, state: Arc<Mutex<ClientState>>) -> io::Result<
 
                     print!("\nEnter command (put/send/quit): ");
                     io::stdout().flush()?;
+                }
+                ServerMessage::Ping(seq) => {
+                    // Server is checking if we're alive - respond with Pong
+                    // Note: We'd need access to the write stream here to respond
+                    // For now, just log it. The proper solution is to share the writer
+                    // between threads or use a channel.
+                    println!("[Heartbeat] Received ping #{}", seq);
+                }
+                ServerMessage::Pong(_seq) => {
+                    // We sent a ping (unusual for client), server responded
+                    // Just ignore
                 }
             },
             Err(e) => {

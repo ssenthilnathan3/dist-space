@@ -13,9 +13,9 @@ This document outlines the checkpoints, tasks, and deliverables required to tran
     - [x] Implement `Delete-Replace` transformation.
     - [x] Implement `Replace-Replace` transformation.
     - [x] Fix logic error in `Insert-Insert` transformation (variable shadowing bug).
-- [ ] **Unit Testing Suite**
-    - [ ] Add comprehensive unit tests for all OT permutations.
-    - [ ] Add property-based testing (fuzzing) to ensure convergence.
+- [x] **Unit Testing Suite**
+    - [x] Add comprehensive unit tests for all OT permutations (30 tests).
+    - [x] Add property-based testing (fuzzing) to ensure convergence.
 
 ### Checkpoint 1.2: Protocol Hardening
 - [x] **Fix Client Encoding**
@@ -23,9 +23,9 @@ This document outlines the checkpoints, tasks, and deliverables required to tran
 - [x] **Error Handling**
     - [x] Remove `unwrap()` and `expect()` from server request path.
     - [x] Implement proper `Result` propagation and error logging.
-- [ ] **Connection Management**
-    - [ ] Implement client timeouts (heartbeats).
-    - [ ] Add connection limits to prevent DoS.
+- [x] **Connection Management**
+    - [x] Implement client timeouts (heartbeats with Ping/Pong).
+    - [x] Add connection limits to prevent DoS (MAX_CLIENTS = 100).
 
 ---
 

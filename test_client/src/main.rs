@@ -5,7 +5,7 @@ use std::{
     thread,
 };
 
-use common::{protocol::ServerMessage, workspace::OperationProto};
+use common::{protocol::ServerMessage, space::OperationProto};
 
 pub struct ClientState {
     pub client_id: String,
@@ -111,7 +111,7 @@ fn main() -> io::Result<()> {
 
                 // Send operation
                 if let Some(ref mut s) = stream {
-                    use common::workspace::{ReplaceOp, operation_proto::Kind};
+                    use common::space::{ReplaceOp, operation_proto::Kind};
 
                     let op_kind = Kind::Replace(ReplaceOp {
                         start: 0,
@@ -201,6 +201,13 @@ fn reader_loop(stream: TcpStream, state: Arc<Mutex<ClientState>>) -> io::Result<
                             "SYNC {{ version: {}, doc_id: \"{}\", content: \"{}\" }}",
                             doc.version, doc.doc_id, doc.content
                         );
+                    }
+                    ServerMessage::Ping(seq) => {
+                        println!("[DEBUG] Received Ping({})", seq);
+                        // In a full implementation, we'd respond with Pong here
+                    }
+                    ServerMessage::Pong(seq) => {
+                        println!("[DEBUG] Received Pong({})", seq);
                     }
                 }
             }

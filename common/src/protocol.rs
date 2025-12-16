@@ -1,26 +1,43 @@
-use crate::proto::workspace::{OperationProto, SyncDocumentProto};
+use crate::proto::space::{OperationProto, SyncDocumentProto};
 use bytes::{Buf, BufMut, BytesMut};
 use prost::Message;
 use std::io::Cursor;
 
-// Our application enum
+/// Server-to-client and client-to-server message types.
 pub enum ServerMessage {
+    /// An operation (edit) to be applied.
     Operation(OperationProto),
+    /// Full document sync (state snapshot).
     SyncDocument(SyncDocumentProto),
+    /// Ping message - sent by server to check client liveness.
+    Ping(u64),
+    /// Pong message - response to Ping with the same sequence number.
+    Pong(u64),
 }
+
+/// Message type IDs for protocol encoding.
+const MSG_TYPE_OPERATION: u8 = 1;
+const MSG_TYPE_SYNC_DOCUMENT: u8 = 2;
+const MSG_TYPE_PING: u8 = 3;
+const MSG_TYPE_PONG: u8 = 4;
 
 impl ServerMessage {
     /// Serializes the inner Protobuf message and wraps it in a length-prefixed buffer with a type ID.
     /// Buffer format: [u32 length (of Type ID + Payload)][u8 type_id][...payload bytes...]
     pub fn encode(&self) -> Vec<u8> {
-        let serialized_payload = match self {
-            ServerMessage::Operation(op_proto) => op_proto.encode_to_vec(),
-            ServerMessage::SyncDocument(sync_proto) => sync_proto.encode_to_vec(),
-        };
-
-        let type_id = match self {
-            ServerMessage::Operation(_) => 1_u8,
-            ServerMessage::SyncDocument(_) => 2_u8,
+        let (type_id, serialized_payload) = match self {
+            ServerMessage::Operation(op_proto) => (MSG_TYPE_OPERATION, op_proto.encode_to_vec()),
+            ServerMessage::SyncDocument(sync_proto) => {
+                (MSG_TYPE_SYNC_DOCUMENT, sync_proto.encode_to_vec())
+            }
+            ServerMessage::Ping(seq) => {
+                // Encode as 8 bytes (u64)
+                (MSG_TYPE_PING, seq.to_be_bytes().to_vec())
+            }
+            ServerMessage::Pong(seq) => {
+                // Encode as 8 bytes (u64)
+                (MSG_TYPE_PONG, seq.to_be_bytes().to_vec())
+            }
         };
 
         // Total length includes the 1-byte type_id + the payload length
@@ -42,8 +59,7 @@ impl ServerMessage {
         // We use a Cursor to track our position as we read through the bytes
         let mut cursor = Cursor::new(frame_bytes);
 
-        // Read the total length (optional, as we already have the full slice,
-        // but good practice if reading from a stream incrementally)
+        // Read the total length
         let _total_length = cursor.get_u32();
 
         // Read the type ID discriminator
@@ -54,15 +70,39 @@ impl ServerMessage {
         let payload_slice = &frame_bytes[cursor.position() as usize..];
 
         match type_id {
-            1 => {
+            MSG_TYPE_OPERATION => {
                 // Decode as OperationProto
                 let proto = OperationProto::decode(payload_slice)?;
                 Ok(ServerMessage::Operation(proto))
             }
-            2 => {
+            MSG_TYPE_SYNC_DOCUMENT => {
                 // Decode as SyncDocumentProto
                 let proto = SyncDocumentProto::decode(payload_slice)?;
                 Ok(ServerMessage::SyncDocument(proto))
+            }
+            MSG_TYPE_PING => {
+                // Decode sequence number
+                if payload_slice.len() < 8 {
+                    return Err("Ping payload too short".into());
+                }
+                let seq = u64::from_be_bytes(
+                    payload_slice[..8]
+                        .try_into()
+                        .map_err(|_| "Invalid ping payload")?,
+                );
+                Ok(ServerMessage::Ping(seq))
+            }
+            MSG_TYPE_PONG => {
+                // Decode sequence number
+                if payload_slice.len() < 8 {
+                    return Err("Pong payload too short".into());
+                }
+                let seq = u64::from_be_bytes(
+                    payload_slice[..8]
+                        .try_into()
+                        .map_err(|_| "Invalid pong payload")?,
+                );
+                Ok(ServerMessage::Pong(seq))
             }
             _ => Err(format!("Unknown message type ID: {}", type_id).into()),
         }
@@ -70,8 +110,10 @@ impl ServerMessage {
 
     pub fn get_message_type_id(&self) -> u8 {
         match &self {
-            ServerMessage::Operation(_) => 1_u8,
-            ServerMessage::SyncDocument(_) => 2_u8,
+            ServerMessage::Operation(_) => MSG_TYPE_OPERATION,
+            ServerMessage::SyncDocument(_) => MSG_TYPE_SYNC_DOCUMENT,
+            ServerMessage::Ping(_) => MSG_TYPE_PING,
+            ServerMessage::Pong(_) => MSG_TYPE_PONG,
         }
     }
 }

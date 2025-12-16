@@ -94,6 +94,9 @@ impl Reader {
         loop {
             match Reader::read_frame(&mut stream) {
                 Ok(frame) => {
+                    // Update client activity timestamp on any received message
+                    state.touch_client(client_id);
+
                     match ServerMessage::decode(&frame.payload) {
                         Ok(ServerMessage::Operation(op)) => {
                             println!("[{}] Received Operation from client", client_id);
@@ -115,7 +118,25 @@ impl Reader {
                             }
                         }
                         Ok(ServerMessage::SyncDocument(_)) => {
-                            // Handle SyncDocument if needed
+                            // Server doesn't expect SyncDocument from clients
+                            println!("[{}] Ignoring SyncDocument from client", client_id);
+                        }
+                        Ok(ServerMessage::Ping(seq)) => {
+                            // Client sent a ping (unusual but handle it)
+                            println!("[{}] Received Ping({}) from client", client_id, seq);
+                            // Respond with Pong
+                            let pong = ServerMessage::Pong(seq);
+                            let pong_frame = Frame::new_arc(ServerMessage::encode(&pong));
+                            // Send pong back to just this client
+                            if let Ok(clients) = state.get_clients_arc().lock() {
+                                if let Some(client) = clients.iter().find(|c| c.client_id == client_id) {
+                                    let _ = client.writer_sender.try_send(pong_frame);
+                                }
+                            }
+                        }
+                        Ok(ServerMessage::Pong(seq)) => {
+                            // Client responded to our ping - activity already updated above
+                            println!("[{}] Received Pong({}) from client", client_id, seq);
                         }
                         Err(e) => {
                             eprintln!("[{}] Failed to decode message: {}", client_id, e);

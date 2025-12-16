@@ -6,7 +6,7 @@ pub struct Document {
     pub version: u64,
 }
 
-use crate::types::{DeleteOp, InsertOp, OperationKind, ReplaceOp};
+use crate::operation::{DeleteOp, InsertOp, OperationKind, ReplaceOp};
 
 impl Document {
     pub fn apply_op(&mut self, op: &OperationKind) -> Result<(), String> {
@@ -30,7 +30,8 @@ impl Document {
                         self.content.len()
                     ));
                 }
-                self.content.replace_range(*start as usize..*end as usize, "");
+                self.content
+                    .replace_range(*start as usize..*end as usize, "");
             }
             OperationKind::Replace(ReplaceOp {
                 start, end, text, ..
